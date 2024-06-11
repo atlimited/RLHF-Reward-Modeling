@@ -18,9 +18,10 @@ from transformers import (
     HfArgumentParser,
     Trainer,
     TrainingArguments,
+    TrainerCallback,
 )
 from transformers.utils import PaddingStrategy
-
+from peft import LoraConfig
 
 
 
@@ -128,11 +129,53 @@ output_name = script_args.output_path
 
 def build_dataset(tokenizer, train_path, eval_path):
 
+    def convert_chat_history_format(sample) -> Dict[str, str]:
+        # llm-jp/hh-rlhf-12k-ja用
+        # 'conversations' カラムから最後の 'value' を取得
+        conversations = sample.get("conversations", [])
+        if not conversations or not isinstance(conversations, list):
+            raise KeyError(f"Key 'conversations' not found or is not a list in sample: {sample}")
+
+        # print(conversations)
+        history = []
+        for d in conversations:
+            history.append(
+                {
+                    "role": 'assistant' if d["from"] =='gpt' else 'user',
+                    "content": d["value"],
+                }
+            )
+        if history[-1]['role'] == 'assistant':
+          history.append(
+              {
+                  "role": 'user',
+                  "content": "",
+              }
+          )
+
+        chosen = {
+            "role": "assistant",
+            "content": sample["chosen"],
+        }
+
+        rejected = {
+            "role": "assistant",
+            "content": sample["rejected"],
+        }
+
+        # print(history)
+        # print(history + [chosen])
+        # print(history + [rejected])
+
+        return history + [chosen], history + [rejected]
+
+
     def tokenize(sample):
+        chosen, rejected = convert_chat_history_format(sample)
         sample['positive'] = tokenizer.apply_chat_template(
-            sample['chosen'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
+            chosen, tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
         sample['negative'] = tokenizer.apply_chat_template(
-            sample['rejected'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
+            rejected, tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
         tokenized_pos = tokenizer(sample['positive'], truncation=True)
         tokenized_neg = tokenizer(sample['negative'], truncation=True)
         sample["input_ids_j"] = tokenized_pos["input_ids"]
@@ -141,8 +184,22 @@ def build_dataset(tokenizer, train_path, eval_path):
         sample["attention_mask_k"] = tokenized_neg["attention_mask"]
         return sample
 
+
+    # def tokenize(sample):
+    #     sample['positive'] = tokenizer.apply_chat_template(
+    #         sample['chosen'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
+    #     sample['negative'] = tokenizer.apply_chat_template(
+    #         sample['rejected'], tokenize=False, add_generation_prompt=False).replace(tokenizer.bos_token, "")
+    #     tokenized_pos = tokenizer(sample['positive'], truncation=True)
+    #     tokenized_neg = tokenizer(sample['negative'], truncation=True)
+    #     sample["input_ids_j"] = tokenized_pos["input_ids"]
+    #     sample["attention_mask_j"] = tokenized_pos["attention_mask"]
+    #     sample["input_ids_k"] = tokenized_neg["input_ids"]
+    #     sample["attention_mask_k"] = tokenized_neg["attention_mask"]
+    #     return sample
+
     ds = load_dataset(train_path, split="train").shuffle(seed=42)
-    #ds = ds.select(range(2000))
+    # ds = ds.select(range(2000))
     ds = ds.map(tokenize, num_proc=8)
 
     eval_dataset = None
@@ -187,7 +244,7 @@ training_args = TrainingArguments(
 )
 
 model = AutoModelForSequenceClassification.from_pretrained(
-    script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16, use_flash_attention_2=True,
+    script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16, use_flash_attention_2=True, load_in_4bit=True,
 )
 
 model.config.use_cache = not script_args.gradient_checkpointing
@@ -265,6 +322,26 @@ class RewardTrainer(Trainer):
         return loss
 
 
+# LoRAパラメータ
+peft_config = LoraConfig(
+    r=64,  # LoRAアテンションの次元
+    lora_alpha=16,  # LoRAスケーリングのAlphaパラメータ
+    lora_dropout=0.1,  # LoRA レイヤーのドロップアウト確率
+    bias="none",  # LoRAのバイアス種別 ("none","all", "lora_only")
+    task_type="CAUSAL_LM",  # タスク種別
+    # target_modules = ['q_proj', 'v_proj', 'o_proj', 'down_proj', 'k_proj', 'gate_proj', 'up_proj']
+    target_modules = ['v_proj', 'q_proj', 'k_proj', 'down_proj', 'o_proj', 'gate_proj', 'up_proj']
+    # target_modules = ['c_fc', 'c_proj', 'c_attn']
+)
+
+model.add_adapter(peft_config)
+
+# memory error対策
+class ClearCacheCallback(TrainerCallback):
+    def on_step_end(self, args, state, control, **kwargs):
+        torch.cuda.empty_cache()  # 各ステップ終了時にキャッシュをクリア
+
+
 # Train the model, woohoo.
 trainer = RewardTrainer(
     model=model,
@@ -273,7 +350,9 @@ trainer = RewardTrainer(
     eval_dataset=eval_dataset,
     compute_metrics=compute_metrics,
     data_collator=RewardDataCollatorWithPadding(
-        tokenizer=tokenizer, max_length=script_args.max_length),
+        tokenizer=tokenizer, max_length=script_args.max_length
+    ),
+    callbacks=[ClearCacheCallback()],
 )
 
 
@@ -284,3 +363,4 @@ print("Saving last checkpoint of the model")
 #model.save_pretrained(output_name + "/last_checkpoint")
 trainer.save_model(output_name + "/last_checkpoint")
 tokenizer.save_pretrained(output_name + "/last_checkpoint")
+
