@@ -106,7 +106,8 @@ script_args = parser.parse_args_into_dataclasses()[0]
 
 # Load the value-head model and tokenizer.
 tokenizer_name = script_args.model_name
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_fast = False)
+#tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, use_fast = False)
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
 # Adjusted according to the base model
 # Need to do this for the models that don't have an official pad token.
@@ -249,8 +250,30 @@ model = AutoModelForSequenceClassification.from_pretrained(
     torch_dtype=torch.bfloat16, 
     use_flash_attention_2=True, 
 #    device_map="auto",
-#    load_in_4bit=True,
+#    load_in_8bit=True,
 )
+print('==========model==============')
+print(model)
+
+#import bitsandbytes as bnb
+#
+#def find_all_linear_names(model):
+#    cls = bnb.nn.Linear8bit  # (default:torch.nn.Linear,4bit:bnb.nn.Linear4bit,8bit:bnb.nn.Linear8bitLt)
+#    lora_module_names = set()
+#    for name, module in model.named_modules():
+#        if isinstance(module, cls):
+#            names = name.split('.')
+#            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+#
+#
+#    if 'lm_head' in lora_module_names: # needed for 16-bit
+#        lora_module_names.remove('lm_head')
+#    return list(lora_module_names)
+#
+#print(find_all_linear_names(model))
+
+
+print('=============================')
 
 model.config.use_cache = not script_args.gradient_checkpointing
 model.config.pad_token_id = tokenizer.pad_token_id
@@ -334,9 +357,17 @@ peft_config = LoraConfig(
     lora_dropout=0.1,  # LoRA レイヤーのドロップアウト確率
     bias="none",  # LoRAのバイアス種別 ("none","all", "lora_only")
     task_type="CAUSAL_LM",  # タスク種別
-    # target_modules = ['q_proj', 'v_proj', 'o_proj', 'down_proj', 'k_proj', 'gate_proj', 'up_proj']
-    target_modules = ['v_proj', 'q_proj', 'k_proj', 'down_proj', 'o_proj', 'gate_proj', 'up_proj']
-    # target_modules = ['c_fc', 'c_proj', 'c_attn']
+    #target_modules = ['v_proj', 'q_proj', 'k_proj', 'down_proj', 'o_proj', 'gate_proj', 'up_proj']
+    target_modules= [
+        "score", #最終的な出力
+        "q_proj",  #以下､attention関連
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+    ]
 )
 
 model.add_adapter(peft_config)
