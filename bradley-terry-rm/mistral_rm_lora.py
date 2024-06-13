@@ -327,19 +327,19 @@ class RewardTrainer(Trainer):
         return loss
 
 
-## LoRAパラメータ
-#peft_config = LoraConfig(
-#    r=64,  # LoRAアテンションの次元
-#    lora_alpha=16,  # LoRAスケーリングのAlphaパラメータ
-#    lora_dropout=0.1,  # LoRA レイヤーのドロップアウト確率
-#    bias="none",  # LoRAのバイアス種別 ("none","all", "lora_only")
-#    task_type="CAUSAL_LM",  # タスク種別
-#    # target_modules = ['q_proj', 'v_proj', 'o_proj', 'down_proj', 'k_proj', 'gate_proj', 'up_proj']
-#    target_modules = ['v_proj', 'q_proj', 'k_proj', 'down_proj', 'o_proj', 'gate_proj', 'up_proj']
-#    # target_modules = ['c_fc', 'c_proj', 'c_attn']
-#)
-#
-#model.add_adapter(peft_config)
+# LoRAパラメータ
+peft_config = LoraConfig(
+    r=64,  # LoRAアテンションの次元
+    lora_alpha=16,  # LoRAスケーリングのAlphaパラメータ
+    lora_dropout=0.1,  # LoRA レイヤーのドロップアウト確率
+    bias="none",  # LoRAのバイアス種別 ("none","all", "lora_only")
+    task_type="CAUSAL_LM",  # タスク種別
+    # target_modules = ['q_proj', 'v_proj', 'o_proj', 'down_proj', 'k_proj', 'gate_proj', 'up_proj']
+    target_modules = ['v_proj', 'q_proj', 'k_proj', 'down_proj', 'o_proj', 'gate_proj', 'up_proj']
+    # target_modules = ['c_fc', 'c_proj', 'c_attn']
+)
+
+model.add_adapter(peft_config)
 
 # memory error対策
 class ClearCacheCallback(TrainerCallback):
